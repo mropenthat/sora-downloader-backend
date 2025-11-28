@@ -1,51 +1,49 @@
-import express from "express";
-import cors from "cors";
-import { parse } from "node-html-parser";
-import rateLimit from "express-rate-limit";
+// server.js
+import express from 'express';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 
 const app = express();
-app.use(express.json());
-app.use(cors({ origin: "*" }));
 
+// ✅ Trust first proxy (Render)
+app.set('trust proxy', 1);
+
+// ✅ Middleware
+app.use(cors()); // allow all origins
+app.use(express.json()); // parse JSON requests
+
+// ✅ Rate limiter
 const limiter = rateLimit({
-  windowMs: 60000,
-  max: 20
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per window
+  standardHeaders: true, 
+  legacyHeaders: false,
 });
 app.use(limiter);
 
-app.post("/api/resolve", async (req, res) => {
+// ✅ Main endpoint
+app.post('/api/resolve', async (req, res) => {
   const { url } = req.body;
-  if (!url) return res.status(400).json({ error: "Missing URL" });
+
+  if (!url) {
+    return res.status(400).json({ success: false, message: 'No URL provided' });
+  }
 
   try {
-    const response = await fetch(url, { redirect: "follow" });
-    const contentType = response.headers.get("content-type");
-    const finalUrl = response.url;
+    // Replace this with your Sora resolving logic
+    // Example: returning a dummy MP4 URL
+    const mp4Url = 'https://example.com/video.mp4';
 
-    if (contentType?.includes("video") || finalUrl.endsWith(".mp4")) {
-      return res.json({ success: true, mp4Url: finalUrl });
-    }
-
-    const text = await response.text();
-    const root = parse(text);
-
-    const videoTag = root.querySelector("video");
-    if (videoTag?.getAttribute("src")) {
-      return res.json({
-        success: true,
-        mp4Url: new URL(videoTag.getAttribute("src"), finalUrl).toString()
-      });
-    }
-
-    const match = text.match(/https?:\/\/[^"']+\.mp4/);
-    if (match) {
-      return res.json({ success: true, mp4Url: match[0] });
-    }
-
-    res.json({ success: false, error: "MP4 not found" });
+    res.json({ success: true, mp4Url });
   } catch (err) {
-    res.status(500).json({ error: "Server error resolving URL" });
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-app.listen(10000, () => console.log("Server running on port 10000"));
+// ✅ Start server
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
