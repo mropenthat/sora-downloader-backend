@@ -2,48 +2,90 @@
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import { parse } from 'node-html-parser';
 
 const app = express();
 
-// ✅ Trust first proxy (Render)
+// Trust proxy (for Render)
 app.set('trust proxy', 1);
 
-// ✅ Middleware
-app.use(cors()); // allow all origins
-app.use(express.json()); // parse JSON requests
+app.use(cors());
+app.use(express.json());
 
-// ✅ Rate limiter
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per window
-  standardHeaders: true, 
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
   legacyHeaders: false,
 });
 app.use(limiter);
 
-// ✅ Main endpoint
 app.post('/api/resolve', async (req, res) => {
   const { url } = req.body;
-
   if (!url) {
-    return res.status(400).json({ success: false, message: 'No URL provided' });
+    return res.status(400).json({ success: false, error: 'Missing URL' });
   }
 
   try {
-    // Replace this with your Sora resolving logic
-    // Example: returning a dummy MP4 URL
-    const mp4Url = 'https://example.com/video.mp4';
+    // First, fetch the URL, follow redirects
+    const resp = await fetch(url, { method: 'GET', redirect: 'follow' });
 
-    res.json({ success: true, mp4Url });
+    // If direct MP4 (or video) — e.g. content-type includes video or URL ends .mp4
+    const contentType = resp.headers.get('content-type') || '';
+    const finalUrl = resp.url;
+
+    if (contentType.startsWith('video/') || finalUrl.toLowerCase().endsWith('.mp4')) {
+      return res.json({ success: true, mp4Url: finalUrl });
+    }
+
+    // Else — treat as HTML page: parse for video src or .mp4 links
+    const text = await resp.text();
+    const root = parse(text);
+
+    // Try <video> tags
+    const videoEl = root.querySelector('video');
+    if (videoEl) {
+      const src = videoEl.getAttribute('src') || (videoEl.querySelector('source') && videoEl.querySelector('source').getAttribute('src'));
+      if (src) {
+        const absolute = new URL(src, finalUrl).toString();
+        return res.json({ success: true, mp4Url: absolute });
+      }
+    }
+
+    // Try any <a> or <source> with .mp4
+    const links = root.querySelectorAll('a');
+    for (const a of links) {
+      const href = a.getAttribute('href');
+      if (href && href.toLowerCase().includes('.mp4')) {
+        const absolute = new URL(href, finalUrl).toString();
+        return res.json({ success: true, mp4Url: absolute });
+      }
+    }
+
+    const sources = root.querySelectorAll('source');
+    for (const s of sources) {
+      const src = s.getAttribute('src');
+      if (src && src.toLowerCase().includes('.mp4')) {
+        const absolute = new URL(src, finalUrl).toString();
+        return res.json({ success: true, mp4Url: absolute });
+      }
+    }
+
+    // Fallback: plain regex for .mp4 URLs in HTML
+    const re = /https?:\/\/[^'"\\s>]+\\.mp4(\\?[^'"\\s>]*)?/i;
+    const match = text.match(re);
+    if (match) {
+      return res.json({ success: true, mp4Url: match[0] });
+    }
+
+    // Nothing found
+    return res.status(404).json({ success: false, error: 'Could not find mp4 link' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error('Resolve error:', err);
+    return res.status(500).json({ success: false, error: 'Server error' });
   }
 });
 
-// ✅ Start server
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
